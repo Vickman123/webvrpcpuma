@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Experiencia WebXR Monolito - PC PUMA</title>
+    
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --glass-bg: rgba(15, 23, 42, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #000;
+            color: var(--text-color);
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle at center, #1e293b 0%, #020617 100%);
+            z-index: 10;
+            transition: opacity 0.5s ease;
+        }
+
+        #ui-container h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            background: linear-gradient(to right, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        #status-message {
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+            color: #94a3b8;
+            text-align: center;
+            max-width: 600px;
+        }
+
+        .instructions {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .instructions p {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        button {
+            padding: 1rem 2.5rem;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: white;
+            background: var(--primary);
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            margin: 0.5rem;
+        }
+
+        button:hover {
+            background: var(--primary-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        #btn-demo-pc {
+            background: #475569;
+            box-shadow: none;
+        }
+
+        #btn-demo-pc:hover {
+            background: #334155;
+        }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="ui-container">
+        <h1>EXPERIENCIA INTERACTIVA PC PUMA</h1>
+        <p id="status-message">Verificando compatibilidad con WebXR...</p>
+        
+        <div class="instructions">
+            <p>🖐 Agarra objetos</p>
+            <p>🎮 Muévelos</p>
+            <p>🚀 Lánzalos</p>
+        </div>
+
+        <button id="btn-enter-vr" style="display: none;">🥽 ENTRAR EN EXPERIENCIA VR</button>
+        <button id="btn-demo-pc" style="display: none;">💻 Modo Demo en PC</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import * as CANNON from 'cannon-es';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+
+        // --- MÓDULO DE FÍSICAS ---
+        class PhysicsWorld {
+            constructor() {
+                this.world = new CANNON.World({
+                    gravity: new CANNON.Vec3(0, -9.82, 0),
+                });
+                
+                this.defaultMaterial = new CANNON.Material('default');
+                const defaultContactMaterial = new CANNON.ContactMaterial(
+                    this.defaultMaterial,
+                    this.defaultMaterial,
+                    { friction: 0.3, restitution: 0.5 }
+                );
+                this.world.addContactMaterial(defaultContactMaterial);
+                
+                const floorShape = new CANNON.Plane();
+                const floorBody = new CANNON.Body({ mass: 0, shape: floorShape, material: this.defaultMaterial });
+                floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+                this.world.addBody(floorBody);
+
+                this.objects = [];
+            }
+
+            addBody(mesh, body) {
+                body.material = this.defaultMaterial;
+                this.world.addBody(body);
+                this.objects.push({ mesh, body });
+            }
+
+            update(dt) {
+                this.world.step(1 / 60, dt, 3);
+                for (const object of this.objects) {
+                    if (!object.body.isGrabbed) {
+                        object.mesh.position.copy(object.body.position);
+                        object.mesh.quaternion.copy(object.body.quaternion);
+                    }
+                }
+            }
+        }
+
+        // --- MÓDULO DE INTERACCIONES WEBXR ---
+        class XRInteractions {
+            constructor(scene, renderer, physicsWorld) {
+                this.scene = scene;
+                this.renderer = renderer;
+                this.physicsWorld = physicsWorld;
+                this.controllers = [];
+                this.raycaster = new THREE.Raycaster();
+                this.tempMatrix = new THREE.Matrix4();
+                this.initControllers();
+            }
+
+            initControllers() {
+                for (let i = 0; i < 2; i++) {
+                    const controller = this.renderer.xr.getController(i);
+                    controller.addEventListener('selectstart', (e) => this.onSelectStart(e));
+                    controller.addEventListener('selectend', (e) => this.onSelectEnd(e));
+                    
+                    const geometry = new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)
+                    ]);
+                    const line = new THREE.Line(geometry);
+                    line.name = 'line';
+                    line.scale.z = 5;
+                    controller.add(line);
+
+                    controller.userData.isSelecting = false;
+                    controller.userData.selectedObject = null;
+                    controller.userData.previousPositions = [];
+                    
+                    this.scene.add(controller);
+                    this.controllers.push(controller);
+
+                    const grip = this.renderer.xr.getControllerGrip(i);
+                    this.scene.add(grip);
+                }
+            }
+
+            onSelectStart(event) {
+                const controller = event.target;
+                controller.userData.isSelecting = true;
+                this.tempMatrix.identity().extractRotation(controller.matrixWorld);
+                this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+                this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
+
+                const interactableMeshes = this.physicsWorld.objects.map(obj => obj.mesh);
+                const intersects = this.raycaster.intersectObjects(interactableMeshes, false);
+
+                if (intersects.length > 0) this.grabObject(controller, intersects[0].object);
+            }
+
+            onSelectEnd(event) {
+                const controller = event.target;
+                controller.userData.isSelecting = false;
+                if (controller.userData.selectedObject) this.releaseObject(controller);
+            }
+
+            grabObject(controller, object) {
+                controller.userData.selectedObject = object;
+                const physObj = this.physicsWorld.objects.find(o => o.mesh === object);
+                if (physObj) {
+                    physObj.body.isGrabbed = true;
+                    physObj.body.velocity.set(0, 0, 0);
+                    physObj.body.angularVelocity.set(0, 0, 0);
+                    controller.userData.selectedBody = physObj.body;
+                }
+                controller.attach(object);
+            }
+
+            releaseObject(controller) {
+                const object = controller.userData.selectedObject;
+                const body = controller.userData.selectedBody;
+                this.scene.attach(object);
+                
+                if (body) {
+                    body.isGrabbed = false;
+                    body.position.copy(object.position);
+                    body.quaternion.copy(object.quaternion);
+                    const velocity = this.calculateVelocity(controller);
+                    body.velocity.copy(velocity);
+                    body.angularVelocity.set((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5);
+                }
+
+                controller.userData.selectedObject = null;
+                controller.userData.selectedBody = null;
+            }
+
+            calculateVelocity(controller) {
+                const positions = controller.userData.previousPositions;
+                if (positions.length < 2) return new CANNON.Vec3(0, 0, 0);
+
+                const currentPos = positions[positions.length - 1].pos;
+                const oldPos = positions[0].pos;
+                const dt = positions[positions.length - 1].time - positions[0].time;
+
+                if (dt <= 0) return new CANNON.Vec3(0, 0, 0);
+                const vel = new CANNON.Vec3((currentPos.x - oldPos.x)/dt, (currentPos.y - oldPos.y)/dt, (currentPos.z - oldPos.z)/dt);
+                vel.scale(1.5, vel);
+                return vel;
+            }
+
+            update() {
+                const now = performance.now() / 1000;
+                for (const controller of this.controllers) {
+                    if (!controller.userData.selectedObject) {
+                        this.tempMatrix.identity().extractRotation(controller.matrixWorld);
+                        this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+                        this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
+
+                        const interactableMeshes = this.physicsWorld.objects.map(obj => obj.mesh);
+                        const intersects = this.raycaster.intersectObjects(interactableMeshes, false);
+
+                        const line = controller.getObjectByName('line');
+                        if (line) {
+                            if (intersects.length > 0) {
+                                line.scale.z = intersects[0].distance;
+                                line.material.color.setHex(0x00ff00);
+                            } else {
+                                line.scale.z = 5;
+                                line.material.color.setHex(0xffffff);
+                            }
+                        }
+                    } else {
+                        const line = controller.getObjectByName('line');
+                        if (line) line.scale.z = 0;
+                    }
+
+                    const pos = new THREE.Vector3();
+                    pos.setFromMatrixPosition(controller.matrixWorld);
+                    controller.userData.previousPositions.push({ pos: pos, time: now });
+                    if (controller.userData.previousPositions.length > 10) controller.userData.previousPositions.shift();
+
+                    if (controller.userData.selectedObject && controller.userData.selectedBody) {
+                        const object = controller.userData.selectedObject;
+                        const body = controller.userData.selectedBody;
+                        const worldPos = new THREE.Vector3();
+                        const worldQuat = new THREE.Quaternion();
+                        object.getWorldPosition(worldPos);
+                        object.getWorldQuaternion(worldQuat);
+                        body.position.copy(worldPos);
+                        body.quaternion.copy(worldQuat);
+                        body.velocity.set(0, 0, 0);
+                        body.angularVelocity.set(0, 0, 0);
+                    }
+                }
+            }
+        }
+
+        // --- MÓDULO DE RASTREO DE MANOS ---
+        class HandTracking {
+            constructor(scene, renderer) {
+                this.scene = scene;
+                this.renderer = renderer;
+                this.handModels = [];
+                this.initHands();
+            }
+
+            initHands() {
+                const handModelFactory = new XRHandModelFactory();
+                for (let i = 0; i < 2; i++) {
+                    const hand = this.renderer.xr.getHand(i);
+                    const handModel = handModelFactory.createHandModel(hand, 'mesh'); 
+                    hand.add(handModel);
+                    this.scene.add(hand);
+                    this.handModels.push(hand);
+                }
+            }
+        }
+
+        // --- MÓDULO DE CONFIGURACIÓN WEBXR ---
+        function setupXR(renderer, setupSceneCallback) {
+            renderer.xr.enabled = true;
+            if ('xr' in navigator) {
+                navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+                    const btnEnterVR = document.getElementById('btn-enter-vr');
+                    const statusMessage = document.getElementById('status-message');
+                    const btnDemoPC = document.getElementById('btn-demo-pc');
+                    
+                    if (supported) {
+                        statusMessage.style.display = 'none';
+                        btnEnterVR.style.display = 'block';
+                        btnDemoPC.style.display = 'block';
+
+                        btnEnterVR.addEventListener('click', async () => {
+                            const sessionInit = { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
+                            try {
+                                const session = await navigator.xr.requestSession('immersive-vr', sessionInit);
+                                renderer.xr.setSession(session);
+                                document.getElementById('ui-container').style.display = 'none';
+                                session.addEventListener('end', () => {
+                                    document.getElementById('ui-container').style.display = 'flex';
+                                });
+                                setupSceneCallback();
+                            } catch (e) {
+                                console.error('Error al iniciar WebXR:', e);
+                                alert('No se pudo iniciar la sesión VR. Error: ' + e.message);
+                            }
+                        });
+                    } else {
+                        statusMessage.textContent = 'Conecta un Meta Quest 3/3S para entrar en la experiencia VR. Tu navegador actual no soporta immersive-vr.';
+                        btnDemoPC.style.display = 'block';
+                    }
+                });
+            } else {
+                document.getElementById('status-message').textContent = 'WebXR no está disponible en este navegador (requiere HTTPS o localhost, y un navegador compatible).';
+                document.getElementById('btn-demo-pc').style.display = 'block';
+            }
+        }
+
+        // --- APLICACIÓN PRINCIPAL ---
+        let camera, scene, renderer, physics, xrInteractions, handTracking, clock;
+
+        init();
+
+        function init() {
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1e293b);
+            scene.fog = new THREE.Fog(0x1e293b, 5, 20);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 50);
+            camera.position.set(0, 1.6, 3);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(3, 5, 3);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 1024;
+            dirLight.shadow.mapSize.height = 1024;
+            scene.add(dirLight);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            physics = new PhysicsWorld();
+            createRoom();
+            createObjects();
+
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 1.6, 0);
+            controls.update();
+
+            document.getElementById('btn-demo-pc').addEventListener('click', () => {
+                document.getElementById('ui-container').style.display = 'none';
+                renderer.setAnimationLoop(render);
+            });
+
+            setupXR(renderer, () => {
+                xrInteractions = new XRInteractions(scene, renderer, physics);
+                handTracking = new HandTracking(scene, renderer);
+                renderer.setAnimationLoop(render);
+            });
+
+            clock = new THREE.Clock();
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createRoom() {
+            const floorGeo = new THREE.PlaneGeometry(20, 20);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8, metalness: 0.2 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            const gridHelper = new THREE.GridHelper(20, 40, 0x3b82f6, 0x1e293b);
+            gridHelper.position.y = 0.01;
+            scene.add(gridHelper);
+
+            createPedestal(0, 0, -1.5);
+            createPedestal(-1.5, 0, -1);
+            createPedestal(1.5, 0, -1);
+        }
+
+        function createPedestal(x, y, z) {
+            const geometry = new THREE.CylinderGeometry(0.3, 0.4, 0.8, 16);
+            const material = new THREE.MeshStandardMaterial({ color: 0x475569 });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, 0.4, z);
+            mesh.receiveShadow = true;
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            const shape = new CANNON.Cylinder(0.3, 0.4, 0.8, 16);
+            const body = new CANNON.Body({ mass: 0, shape: shape });
+            body.position.copy(mesh.position);
+            physics.addBody(mesh, body);
+        }
+
+        function createObjects() {
+            const mat = new THREE.MeshStandardMaterial({ color: 0x60a5fa, roughness: 0.3, metalness: 0.7 });
+
+            // Box
+            const boxMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), mat);
+            boxMesh.position.set(0, 1.0, -1.5);
+            boxMesh.castShadow = true;
+            scene.add(boxMesh);
+            const boxBody = new CANNON.Body({ mass: 1, shape: new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)) });
+            boxBody.position.copy(boxMesh.position);
+            physics.addBody(boxMesh, boxBody);
+
+            // Sphere
+            const sphereMesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 32, 32), new THREE.MeshStandardMaterial({ color: 0xf87171, roughness: 0.2, metalness: 0.8 }));
+            sphereMesh.position.set(-1.5, 1.0, -1);
+            sphereMesh.castShadow = true;
+            scene.add(sphereMesh);
+            const sphereBody = new CANNON.Body({ mass: 0.5, shape: new CANNON.Sphere(0.12) });
+            sphereBody.position.copy(sphereMesh.position);
+            physics.addBody(sphereMesh, sphereBody);
+
+            // Cylinder
+            const cylMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 16), new THREE.MeshStandardMaterial({ color: 0x34d399 }));
+            cylMesh.position.set(1.5, 1.0, -1);
+            cylMesh.castShadow = true;
+            scene.add(cylMesh);
+            const cylBody = new CANNON.Body({ mass: 0.8, shape: new CANNON.Cylinder(0.08, 0.08, 0.3, 16) });
+            cylBody.position.copy(cylMesh.position);
+            physics.addBody(cylMesh, cylBody);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function render() {
+            const dt = clock.getDelta();
+            if (physics) physics.update(dt);
+            if (xrInteractions) xrInteractions.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
