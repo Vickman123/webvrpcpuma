@@ -2,106 +2,44 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meta Quest 3S - AR Passthrough Game</title>
-    <!-- A-Frame Core -->
-    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <!-- A-Frame Physics System -->
-    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
-    <!-- A-Frame Extras (Locomotion/Movement) -->
-    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
-    <!-- Super Hands (Grab and throw interaction) -->
-    <script src="https://unpkg.com/super-hands@3.0.3/dist/super-hands.min.js"></script>
-    <!-- Phase Shift Logic to prevent hands from pushing objects before grabbing -->
-    <script>
-        AFRAME.registerComponent('phase-shift', {
-            init: function () {
-                var el = this.el;
-                el.addEventListener('gripdown', function () {
-                    el.setAttribute('collision-filter', {collisionForces: true});
-                });
-                el.addEventListener('gripup', function () {
-                    el.setAttribute('collision-filter', {collisionForces: false});
-                });
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Experiencia WebXR - PC PUMA</title>
+    <link rel="stylesheet" href="src/styles.css">
+    <!-- Import map para resolver dependencias sin bundler -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
             }
-        });
+        }
     </script>
-    <style>
-        body { margin: 0; padding: 0; overflow: hidden; background-color: #000; }
-    </style>
 </head>
 <body>
-    <!-- 
-      webxr="optionalFeatures: hit-test, local-floor;" permite usar AR Passthrough.
-      physics="gravity: -9.8" habilita la gravedad.
-    -->
-    <a-scene 
-        webxr="optionalFeatures: hit-test, local-floor;" 
-        physics="gravity: -9.8; debug: false"
-        background="transparent: true"> <!-- Fondo transparente vital para ver el Passthrough (realidad aumentada) -->
+    <div id="ui-container">
+        <h1>EXPERIENCIA INTERACTIVA PC PUMA</h1>
+        <p id="status-message">Verificando compatibilidad con WebXR...</p>
         
-        <a-assets>
-            <!-- Mezcla (Mixin) de componentes para las manos con físicas -->
-            <a-mixin id="physics-hands"
-                     physics-collider
-                     phase-shift
-                     collision-filter="collisionForces: false"
-                     static-body="shape: sphere; sphereRadius: 0.04"
-                     super-hands="colliderEvent: collisions;
-                                  colliderEventProperty: els;
-                                  colliderEndEvent: collisions;
-                                  colliderEndEventProperty: clearedEls">
-            </a-mixin>
+        <div class="instructions">
+            <p>🖐 Agarra objetos</p>
+            <p>🎮 Muévelos</p>
+            <p>🚀 Lánzalos</p>
+        </div>
 
-            <!-- Mezcla para objetos interactivos (que se pueden agarrar) -->
-            <a-mixin id="grabbable"
-                     grabbable
-                     dynamic-body>
-            </a-mixin>
-            
-            <img id="caja-textura" src="https://cdn.aframe.io/a-painter/images/floor.jpg" crossorigin="anonymous">
-            <img id="pelota-textura" src="https://cdn.aframe.io/360-image-gallery-boilerplate/img/cubes.jpg" crossorigin="anonymous">
-        </a-assets>
+        <button id="btn-enter-vr" style="display: none;">🥽 ENTRAR EN EXPERIENCIA VR</button>
+        <button id="btn-demo-pc" style="display: none;">💻 Modo Demo en PC</button>
+    </div>
 
-        <!-- SISTEMA DE LOCOMOCIÓN Y JUGADOR -->
-        <a-entity id="rig" movement-controls="fly: false; speed: 0.2" position="0 0 0">
-            <!-- Cámara -->
-            <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-camera>
+    <!-- UI VR Opcional flotante (overlay 2D) -->
+    <div id="vr-overlay" style="display: none;">
+        <div class="vr-panel">
+            <h2>Estadísticas</h2>
+            <p>Objetos lanzados: <span id="stat-thrown">0</span></p>
+            <p>Objetos agarrados: <span id="stat-grabbed">0</span></p>
+        </div>
+    </div>
 
-            <!-- Controladores de Meta Quest (Mapeados a las manos izquierda y derecha) -->
-            <a-entity id="lhand" 
-                      mixin="physics-hands" 
-                      hand-controls="hand: left" 
-                      sphere-collider="objects: .interactable">
-            </a-entity>
-            <a-entity id="rhand" 
-                      mixin="physics-hands" 
-                      hand-controls="hand: right"
-                      sphere-collider="objects: .interactable">
-            </a-entity>
-        </a-entity>
-
-        <!-- ENTORNO VIRTUAL -->
-        <!-- Piso estático invisible pero con físicas para que caigan las cosas, u opcionalmente visible -->
-        <a-plane static-body rotation="-90 0 0" width="20" height="20" visible="false"></a-plane>
-
-        <!-- OBJETOS INTERACTIVOS (Clase .interactable) -->
-        
-        <!-- Pedestal / Mesa (para que los objetos no caigan al piso) -->
-        <a-box static-body position="0 0.5 -1" width="1.5" height="1" depth="0.8" color="#444"></a-box>
-
-        <!-- Pelotas -->
-        <a-sphere class="interactable" mixin="grabbable" position="-0.4 1.5 -0.8" radius="0.1" color="#FF3366"></a-sphere>
-        <a-sphere class="interactable" mixin="grabbable" position="0.4 1.5 -1.0" radius="0.12" src="#pelota-textura"></a-sphere>
-
-        <!-- Cubos y Cajas -->
-        <a-box class="interactable" mixin="grabbable" position="0 1.5 -0.9" width="0.15" height="0.15" depth="0.15" color="#3366FF"></a-box>
-        <a-box class="interactable" mixin="grabbable" position="0.2 1.5 -0.7" width="0.2" height="0.2" depth="0.2" src="#caja-textura"></a-box>
-        <a-box class="interactable" mixin="grabbable" position="-0.2 1.5 -1.1" width="0.25" height="0.25" depth="0.25" color="#FFCC00"></a-box>
-
-        <!-- Iluminación básica -->
-        <a-light type="ambient" color="#FFF" intensity="0.7"></a-light>
-        <a-light type="directional" color="#FFF" intensity="0.8" position="-1 2 1"></a-light>
-    </a-scene>
+    <script type="module" src="src/main.js"></script>
 </body>
 </html>
